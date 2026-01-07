@@ -20,8 +20,33 @@ from functools import partial
 import tempfile
 import pickle
 import signal
+import re
+import logging
 
 # 在循环内动态映射游戏名称到类
+
+# -------------------------
+#  日志系统
+# -------------------------
+class TeeOutput:
+    """同时输出到控制台和文件"""
+    def __init__(self, file_path):
+        self.terminal = sys.stdout
+        self.log_file = open(file_path, 'w', encoding='utf-8')
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()  # 立即刷新到文件
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+    
+    def close(self):
+        if self.log_file:
+            self.log_file.close()
+
 
 # -------------------------
 #  工具函数
@@ -41,6 +66,32 @@ def sample_action_from_pi(pi: np.ndarray, temp: float) -> int:
         return int(np.argmax(pi))
     p = softmax_temperature(pi, temp)
     return int(np.random.choice(len(p), p=p))
+
+
+def determine_n_workers(n_workers: Optional[int], n_tasks: int, prefix: str = "") -> int:
+    """
+    确定工作进程数。如果 n_workers 为 None，则自动计算（备用机制）。
+    通常在程序启动阶段已经确定了工作进程数，这里只在需要时作为备用。
+    
+    Args:
+        n_workers: 指定的工作进程数，None 表示自动计算
+        n_tasks: 任务数量（用于限制工作进程数不超过任务数）
+        prefix: 打印信息的前缀（用于区分不同阶段）
+    
+    Returns:
+        确定的工作进程数（不超过任务数）
+    """
+    if n_workers is None:
+        # 备用机制：如果启动阶段未确定，则自动计算
+        total_cores = mp.cpu_count()
+        available_cores = max(1, total_cores - 4)
+        n_workers = min(available_cores, n_tasks)
+        prefix_str = f"{prefix} - " if prefix else ""
+        print(f"  {prefix_str}CPU核心数: {total_cores}，可用核心数: {available_cores}，使用工作进程数: {n_workers}")
+    else:
+        # 如果已经指定，确保不超过任务数
+        n_workers = min(n_workers, n_tasks)
+    return n_workers
 
 
 # -------------------------
@@ -71,6 +122,23 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
+    
+    def save(self, filepath: str):
+        """保存缓冲区到文件"""
+        with open(filepath, 'wb') as f:
+            # 将deque转换为list以便序列化
+            buffer_list = list(self.buffer)
+            pickle.dump(buffer_list, f)
+    
+    def load(self, filepath: str):
+        """从文件加载缓冲区"""
+        if os.path.exists(filepath):
+            with open(filepath, 'rb') as f:
+                buffer_list = pickle.load(f)
+                # 清空当前缓冲区并加载数据
+                self.buffer.clear()
+                for ex in buffer_list:
+                    self.buffer.append(ex)
 
 
 # -------------------------
@@ -274,12 +342,8 @@ def play_games_parallel(model_candidate: PyTorchModel,
         def signal_handler(signum, frame):
             raise KeyboardInterrupt("收到中断信号")
         signal.signal(signal.SIGINT, signal_handler)
-    if n_workers is None:
-        # 检查CPU核心数，保留4个核心给其他应用
-        total_cores = mp.cpu_count()
-        available_cores = max(1, total_cores - 4)  # 至少保留4个核心，如果核心数少于4则使用1个
-        n_workers = min(available_cores, n_games)
-        print(f"  CPU核心数: {total_cores}，可用核心数: {available_cores}，使用工作进程数: {n_workers}")
+    
+    n_workers = determine_n_workers(n_workers, n_games, "")
     
     # 保存模型权重到临时文件（用于子进程加载）
     with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.pt') as f:
@@ -399,74 +463,244 @@ def play_games_parallel(model_candidate: PyTorchModel,
 
 
 # -------------------------
-#  模型间评估
+#  多进程评估工作函数：在子进程中执行单局评估游戏
+# -------------------------
+def _worker_evaluate_game(args):
+    """
+    工作函数：在子进程中执行一局评估游戏
+    args: (model_new_path, model_best_path, game_name, board_size, game_index,
+           n_simulations, cpuct, seed)
+    返回: (new_wins, draws) - 新模型是否获胜(1/0)，是否平局(1/0)
+    """
+    (model_new_path, model_best_path, game_name, board_size, game_index,
+     n_simulations, cpuct, seed) = args
+    
+    # 设置随机种子（每个进程不同）
+    np.random.seed(seed)
+    random.seed(seed)
+    
+    # 导入必要的模块（在子进程中）
+    from games.gomoku import Gomoku
+    from games.pente import Pente
+    from network import PyTorchModel
+    from mcts.new_mcts_alpha import MCTS
+    
+    # 选择游戏类
+    if game_name.lower().startswith("pente"):
+        GameClass = Pente
+    else:
+        GameClass = Gomoku
+    
+    # 创建模型并加载权重
+    action_size = board_size * board_size
+    model_new = PyTorchModel(board_size=board_size, action_size=action_size)
+    model_new.load(model_new_path)
+    
+    model_best = PyTorchModel(board_size=board_size, action_size=action_size)
+    model_best.load(model_best_path)
+    
+    # 创建游戏
+    game = GameClass(size=board_size)
+    
+    # 随机初始移动
+    r = random.randint(0, board_size - 1)
+    c = random.randint(0, board_size - 1)
+    game.do_move((r, c))
+    
+    # 确定谁先手：新模型在偶数局先手
+    new_starts = (game_index % 2 == 0)
+    move_number = 1
+    
+    # 为两个玩家创建 MCTS 实例
+    mcts_new = MCTS(
+        game_class=GameClass,
+        n_simulations=n_simulations,
+        nn_model=model_new,
+        cpuct=cpuct,
+        dirichlet_alpha=0.03,
+        epsilon=0.03,
+        apply_dirichlet_n_first_moves=10,
+        add_dirichlet_noise=False
+    )
+    mcts_best = MCTS(
+        game_class=GameClass,
+        n_simulations=n_simulations,
+        nn_model=model_best,
+        cpuct=cpuct,
+        dirichlet_alpha=0.03,
+        epsilon=0.03,
+        apply_dirichlet_n_first_moves=10,
+        add_dirichlet_noise=False
+    )
+    
+    # 执行游戏
+    while not game.is_game_over():
+        # 根据当前玩家和谁先手决定谁下棋
+        if (game.current_player == 1 and new_starts) or (game.current_player == 2 and not new_starts):
+            pi = mcts_new.run(game, len(game.move_history))
+        else:
+            pi = mcts_best.run(game, len(game.move_history))
+        
+        # 确定性选择 (argmax)
+        action = int(np.argmax(pi))
+        r, c = divmod(action, game.size)
+        game.do_move((r, c))
+        move_number += 1
+        if move_number > game.size * game.size:
+            break
+    
+    winner = game.get_winner()
+    
+    # 确定新模型是否获胜
+    new_wins = 0
+    draws = 0
+    if winner == 0:
+        draws = 1
+    else:
+        # 确定新模型是否获胜
+        if (winner == 1 and new_starts) or (winner == 2 and not new_starts):
+            new_wins = 1
+    
+    # 清理
+    mcts_new.clear_tree()
+    mcts_best.clear_tree()
+    del mcts_new, mcts_best, model_new, model_best, game
+    gc.collect()
+    
+    return new_wins, draws
+
+
+# -------------------------
+#  模型间评估（多进程版本）
 # -------------------------
 def evaluate_models(model_new: PyTorchModel,
                 model_best: PyTorchModel,
                 game_name: str,
                 n_games: int = 20,
                 n_simulations: int = 100,
-                cpuct: float = 1.0) -> Tuple[float, int]:
+                cpuct: float = 1.0,
+                n_workers: Optional[int] = None) -> Tuple[int, float, int]:
     """
     在 model_new 和 model_best 之间进行 n_games 局游戏（轮流先手）。
-    返回 (win_rate_of_new, draws)
+    使用多进程并行执行评估游戏。
+    返回 (new_wins, win_rate, draws)
     """
-    # 选择游戏类
-    if game_name.lower().startswith("pente"):
-        rules_name = "pente"
-    else:
-        rules_name = "gomoku"
-
-    new_wins = 0
-    draws = 0
-    total = n_games
-
-    for i in range(n_games):
-        game = GameClass(size=model_new.board_size)
-
-        r = random.randint(0, 14)
-        c = random.randint(0, 14)
-        game.do_move((r, c))
-
-        # 确定谁先手：新模型在偶数局先手
-        new_starts = (i % 2 == 0)
-        move_number = 1
-
-        # 为两个玩家创建 MCTS 实例（扩展时各自使用自己的模型）
-        mcts_new = MCTS(game_class=GameClass, n_simulations=n_simulations, nn_model=model_new, cpuct=cpuct, dirichlet_alpha=0.03, epsilon=0.03, apply_dirichlet_n_first_moves=10, add_dirichlet_noise=False)
-        mcts_best = MCTS(game_class=GameClass, n_simulations=n_simulations, nn_model=model_best, cpuct=cpuct, dirichlet_alpha=0.03, epsilon=0.03, apply_dirichlet_n_first_moves=10, add_dirichlet_noise=False)
-
-        while not game.is_game_over():
-            # 根据当前玩家和谁先手决定谁下棋
-            if (game.current_player == 1 and new_starts) or (game.current_player == 2 and not new_starts):
-                pi = mcts_new.run(game, len(game.move_history))
-            else:
-                pi = mcts_best.run(game, len(game.move_history))
-
-            # 确定性选择 (argmax)
-            action = int(np.argmax(pi))
-            r, c = divmod(action, game.size)
-            game.do_move((r, c))
-            move_number += 1
-            if move_number > game.size * game.size:
-                break
-
-        winner = game.get_winner()
-        if winner == 0:
-            draws += 1
-        else:
-            # 确定新模型是否获胜
-            if (winner == 1 and new_starts) or (winner == 2 and not new_starts):
-                new_wins += 1
-
-        mcts_new.clear_tree()
-        mcts_best.clear_tree()
-        del mcts_new
-        del mcts_best
-        gc.collect()
-
-    win_rate = new_wins / float(total)
-    return new_wins, win_rate, draws
+    n_workers = determine_n_workers(n_workers, n_games, "评估阶段")
+    
+    # 保存模型权重到临时文件（用于子进程加载）
+    with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.pt') as f:
+        temp_model_new_path = f.name
+        model_new.save(temp_model_new_path)
+    
+    with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.pt') as f:
+        temp_model_best_path = f.name
+        model_best.save(temp_model_best_path)
+    
+    try:
+        # 准备参数
+        seeds = [random.randint(0, 2**31 - 1) for _ in range(n_games)]
+        args_list = [
+            (temp_model_new_path, temp_model_best_path, game_name, model_new.board_size, i,
+             n_simulations, cpuct, seed)
+            for i, seed in enumerate(seeds)
+        ]
+        
+        # 记录开始时间
+        start_time = time.time()
+        start_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  评估阶段 - 开始时间: {start_time_str}")
+        print(f"  评估阶段 - 使用 {n_workers} 个进程并行评估 {n_games} 局游戏...")
+        
+        # 使用进程池并行执行
+        pool = None
+        results = None
+        try:
+            pool = mp.Pool(processes=n_workers)
+            # 使用 map_async 替代 map，这样可以响应中断
+            async_result = pool.map_async(_worker_evaluate_game, args_list)
+            
+            # 使用轮询机制等待结果，这样可以响应 KeyboardInterrupt
+            while True:
+                try:
+                    # 使用短超时轮询，这样可以在每次循环中检查中断
+                    results = async_result.get(timeout=1.0)
+                    break  # 如果成功获取结果，退出循环
+                except mp.TimeoutError:
+                    # 超时是正常的，继续轮询
+                    continue
+                except KeyboardInterrupt:
+                    print("\n  评估阶段 - 检测到中断信号 (CTRL-C)，正在终止进程池...")
+                    # 立即终止所有子进程
+                    if pool is not None:
+                        try:
+                            pool.terminate()
+                        except:
+                            pass
+                    # 等待进程结束
+                    if pool is not None:
+                        try:
+                            pool.join(timeout=5)
+                        except KeyboardInterrupt:
+                            pass
+                        except:
+                            pass
+                    print("  评估阶段 - 进程池已终止")
+                    raise  # 重新抛出异常，让上层处理
+        
+        except KeyboardInterrupt:
+            # 确保进程池被清理
+            if pool is not None:
+                try:
+                    pool.terminate()
+                except:
+                    pass
+                try:
+                    pool.join(timeout=2)
+                except (KeyboardInterrupt, Exception):
+                    pass
+            raise
+        finally:
+            # 确保进程池被正确关闭
+            if pool is not None:
+                try:
+                    pool.close()
+                except:
+                    pass
+                try:
+                    pool.join(timeout=1)
+                except (KeyboardInterrupt, Exception):
+                    pass
+        
+        # 如果没有结果（被中断），返回默认值
+        if results is None:
+            return 0, 0.0, 0
+        
+        # 记录结束时间
+        end_time = time.time()
+        end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elapsed_time = end_time - start_time
+        
+        # 收集结果
+        new_wins = 0
+        draws = 0
+        for wins, draw in results:
+            new_wins += wins
+            draws += draw
+        
+        total = n_games
+        win_rate = new_wins / float(total) if total > 0 else 0.0
+        
+        print(f"  评估阶段 - 结束时间: {end_time_str}")
+        print(f"  评估阶段 - 耗时: {elapsed_time:.1f}秒 ({elapsed_time/60:.1f}分钟)")
+        
+        return new_wins, win_rate, draws
+    
+    finally:
+        # 清理临时文件
+        if os.path.exists(temp_model_new_path):
+            os.unlink(temp_model_new_path)
+        if os.path.exists(temp_model_best_path):
+            os.unlink(temp_model_best_path)
 
 
 # -------------------------
@@ -496,6 +730,10 @@ def train_alphazero(
     核心训练流程。
     """
     os.makedirs(model_dir, exist_ok=True)
+    
+    # 创建训练数据保存目录
+    training_data_dir = os.path.join(model_dir, "training_data")
+    os.makedirs(training_data_dir, exist_ok=True)
 
     # 根据 board_size 计算动作空间大小
     action_size = board_size * board_size  # 对于 Gomoku（或 Pente），动作是棋盘上的位置
@@ -515,6 +753,17 @@ def train_alphazero(
 
     # 经验回放缓冲区
     buffer = ReplayBuffer(capacity=buffer_size)
+    
+    # 加载之前保存的buffer（如果存在）- 只在程序启动时加载一次
+    buffer_filepath = os.path.join(training_data_dir, "training_data_buffer.pkl")
+    if os.path.exists(buffer_filepath):
+        try:
+            buffer.load(buffer_filepath)
+            print(f"\n从 {buffer_filepath} 加载了 {len(buffer)} 个训练样本到缓冲区。\n")
+        except Exception as e:
+            print(f"\n警告: 加载训练数据失败: {e}，从空缓冲区开始。\n")
+    else:
+        print("未找到已保存的训练数据，从空缓冲区开始。\n")
 
     # 温度调度
     def temp_fn(move_number: int):
@@ -544,6 +793,11 @@ def train_alphazero(
                 )
                 buffer.add(all_examples)
                 print(f"  缓冲区大小: {len(buffer)}")
+                
+                # 保存整个buffer到硬盘（覆盖之前的保存）
+                buffer_filepath = os.path.join(training_data_dir, "training_data_buffer.pkl")
+                buffer.save(buffer_filepath)
+                print(f"  缓冲区已保存到: {buffer_filepath} ({len(buffer)} 个样本)")
             else:
                 # 单进程版本（原始代码，用于调试）
                 # 记录开始时间
@@ -579,48 +833,54 @@ def train_alphazero(
                 print(f"  单进程生成完成: {games_per_iteration} 局游戏，共生成 {total_examples} 个训练样本")
                 print(f"  获胜统计: 玩家1={winners.get(1, 0)}, 玩家2={winners.get(2, 0)}, 平局={winners.get(0, 0)}")
                 print(f"  缓冲区大小: {len(buffer)}")
+                
+                # 保存整个buffer到硬盘（覆盖之前的保存）
+                buffer_filepath = os.path.join(training_data_dir, "training_data_buffer.pkl")
+                buffer.save(buffer_filepath)
+                print(f"  缓冲区已保存到: {buffer_filepath} ({len(buffer)} 个样本)")
 
             # 如果有足够的样本，训练候选模型
-        if len(buffer) >= batch_size:
-            print(f"\nTraining candidate model: buffer={len(buffer)}, batch_size={batch_size}, epochs_per_iter={epochs_per_iter}")
-            n_batches = max(1, len(buffer) // batch_size)
-            for epoch in range(epochs_per_iter):
-                epoch_t0 = time.time()
-                for b in range(n_batches):
-                    states_b, pis_b, zs_b = buffer.sample(batch_size)
-                    loss_info = model_candidate.train_batch(states_b, pis_b, zs_b, epochs=1)
-                epoch_t1 = time.time()
-                print(f"  epoch {epoch+1}/{epochs_per_iter} finished in {epoch_t1 - epoch_t0:.1f}s, last_loss={loss_info}")
-        else:
-            print(f"训练样本不足 (buffer={len(buffer)}, 需要 {batch_size})。跳过本次迭代的训练。")
+            if len(buffer) >= batch_size:
+                print(f"\nTraining candidate model: buffer={len(buffer)}, batch_size={batch_size}, epochs_per_iter={epochs_per_iter}")
+                n_batches = max(1, len(buffer) // batch_size)
+                for epoch in range(epochs_per_iter):
+                    epoch_t0 = time.time()
+                    for b in range(n_batches):
+                        states_b, pis_b, zs_b = buffer.sample(batch_size)
+                        loss_info = model_candidate.train_batch(states_b, pis_b, zs_b, epochs=1)
+                    epoch_t1 = time.time()
+                    print(f"  epoch {epoch+1}/{epochs_per_iter} finished in {epoch_t1 - epoch_t0:.1f}s, last_loss={loss_info}")
+            else:
+                print(f"训练样本不足 (buffer={len(buffer)}, 需要 {batch_size})。跳过本次迭代的训练。")
 
-        # 评估
-        print("\nEvaluating candidate vs best...")
-        try:
-            new_wins, win_rate, draws = evaluate_models(model_candidate, model_best, game_name, n_games=eval_games, n_simulations=eval_mcts_simulations, cpuct=cpuct)
-        except Exception as e:
-            print("Evaluation failed (exception):", e)
-            win_rate, draws = 0.0, 0
+            # 评估
+            print("\nEvaluating candidate vs best...")
+            try:
+                new_wins, win_rate, draws = evaluate_models(model_candidate, model_best, game_name, n_games=eval_games, n_simulations=eval_mcts_simulations, cpuct=cpuct, n_workers=n_workers)
+            except Exception as e:
+                print("Evaluation failed (exception):", e)
+                win_rate, draws = 0.0, 0
+                new_wins = 0
 
-        print(f" 候选模型胜率 = {win_rate:.3f} ({new_wins}/{eval_games}) (平局={draws})")
+            print(f" 候选模型胜率 = {win_rate:.3f} ({new_wins}/{eval_games}) (平局={draws})")
 
-        # 接受/拒绝
-        if win_rate >= win_rate_threshold:
-            print(" 候选模型被接受 -> 提升为最佳模型。")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(model_dir, f"model_best_iter{it}_{timestamp}.pt")
-            model_candidate.save(path)
-            model_best = model_candidate
-            # 从最佳模型创建新的候选模型
-            model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
-            model_candidate.net.load_state_dict(model_best.net.state_dict())
-            model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
-        else:
-            print(" 候选模型被拒绝 -> 从最佳模型恢复候选模型。")
-            # 从最佳模型权重重置候选模型
-            model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
-            model_candidate.net.load_state_dict(model_best.net.state_dict())
-            model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
+            # 接受/拒绝
+            if win_rate >= win_rate_threshold:
+                print(" 候选模型被接受 -> 提升为最佳模型。")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                path = os.path.join(model_dir, f"model_best_iter{it}_{timestamp}.pt")
+                model_candidate.save(path)
+                model_best = model_candidate
+                # 从最佳模型创建新的候选模型
+                model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
+                model_candidate.net.load_state_dict(model_best.net.state_dict())
+                model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
+            else:
+                print(" 候选模型被拒绝 -> 从最佳模型恢复候选模型。")
+                # 从最佳模型权重重置候选模型
+                model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
+                model_candidate.net.load_state_dict(model_best.net.state_dict())
+                model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
 
             # 定期保存最佳模型状态
             if it % save_every == 0:
@@ -634,19 +894,7 @@ def train_alphazero(
     
     except KeyboardInterrupt:
         print("\n\n=== 训练被用户中断 (CTRL-C) ===")
-        if 'it' in locals():
-            print(f"当前迭代: {it}")
-        print("正在保存当前最佳模型...")
-        
-        # 保存当前最佳模型
-        if 'model_best' in locals():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            iter_num = it if 'it' in locals() else 'unknown'
-            interrupt_path = os.path.join(model_dir, f"interrupted_iter{iter_num}_{timestamp}.pt")
-            model_best.save(interrupt_path)
-            print(f"已保存中断时的模型: {interrupt_path}")
-        
-        print("训练已安全退出")
+        print("程序退出，不保留任何内容。")
         sys.exit(0)
     
     print("\n=== 训练完成 ===")
@@ -655,39 +903,102 @@ def train_alphazero(
 #  入口点
 # -------------------------
 if __name__ == "__main__":
-    # Windows 兼容性：设置 multiprocessing 启动方法
-    # 注意：在 Windows 上，spawn 方法会创建新的 Python 解释器，所以 CTRL-C 处理需要特殊处理
-    if sys.platform == "win32":
-        try:
-            mp.set_start_method("spawn", force=True)
-        except RuntimeError:
-            # 如果已经设置过，忽略错误
-            pass
+    # 设置日志文件：将控制台输出同时保存到文件
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filepath = os.path.join(log_dir, f"train_{timestamp}.log")
+    tee_output = TeeOutput(log_filepath)
+    sys.stdout = tee_output
+    sys.stderr = tee_output  # 同时也捕获错误输出
     
-    train_alphazero(
-        game_name="gomoku",           # 游戏 Gomoku
-        board_size=15,                # 棋盘大小 (15x15)
+    print(f"训练日志文件: {log_filepath}\n")
+    
+    try:
+        # Windows 兼容性：设置 multiprocessing 启动方法
+        # 注意：在 Windows 上，spawn 方法会创建新的 Python 解释器，所以 CTRL-C 处理需要特殊处理
+        if sys.platform == "win32":
+            try:
+                mp.set_start_method("spawn", force=True)
+            except RuntimeError:
+                # 如果已经设置过，忽略错误
+                pass
 
-        num_iterations=30,           # 30 次训练迭代
-        games_per_iteration=40,       # 每次迭代 40 局游戏
+        # 找到models里面最新的模型
+        import re
 
-        n_simulations=2000,          # MCTS 2000 次模拟
-        cpuct=1.0,                   # MCTS 的探索/利用平衡因子
+        model_dir = "models"
+        # 查找所有 snapshot*.pt 文件
+        snapshot_files = [f for f in os.listdir(model_dir) if f.startswith('snapshot_') and f.endswith('.pt')]
+        if len(snapshot_files) == 0:
+            print("没有找到任何快照模型 (snapshot_*.pt)。")
+            latest_snapshot = None
+            next_iter = 1
+        else:
+            # 以迭代号排序，选出最新
+            def extract_iter_num(filename):
+                match = re.search(r"snapshot_iter(\d+)_", filename)
+                return int(match.group(1)) if match else -1
 
-        buffer_size=80000,           # 经验回放缓冲区，最多 80,000 个样本（容纳约5次迭代）
-        batch_size=128,               # 每个训练批次 128 个样本
-        epochs_per_iter=5,           # 每次迭代 5 个训练轮次（GPU快时可增加）
+            snapshot_files.sort(key=lambda x: (extract_iter_num(x), os.path.getmtime(os.path.join(model_dir, x))))
+            latest_snapshot = snapshot_files[-1]
+            print(f"最新快照模型: {latest_snapshot}")
 
-        temp_threshold=10,           # 探索温度阈值
-        eval_games=30,               # 30 局评估游戏（提高统计稳定性）
-        eval_mcts_simulations=2000,  # 评估时 MCTS 2000 次模拟
-        win_rate_threshold=0.55,     # 如果候选模型胜率达到 55% 则接受
+            # 解析下一个迭代号
+            latest_iter = extract_iter_num(latest_snapshot)
+            next_iter = latest_iter + 1
+            print(f"下一个迭代号: {next_iter}")
 
-        model_dir="models",          # 保存模型的目录
-        save_every=1,                # 每次迭代保存模型
-        pretrained_model_path=None,  # 预训练模型路径（None 表示从头训练）
+        #  pretrained_model_path 是最新快照模型路径
+        pretrained_model_path = os.path.join(model_dir, latest_snapshot) if latest_snapshot else None
+       
+        # 在程序启动阶段确定工作进程数
+        n_workers_user = None  # 用户指定的工作进程数，None 表示自动选择
+        if n_workers_user is None:
+            total_cores = mp.cpu_count()
+            available_cores = max(1, total_cores - 4)  # 至少保留4个核心给其他应用
+            n_workers = available_cores
+            print(f"\n=== 系统信息 ===")
+            print(f"CPU总核心数: {total_cores}")
+            print(f"可用核心数: {available_cores} (已保留4个核心)")
+            print(f"工作进程数: {n_workers}")
+            print(f"===============\n")
+        else:
+            n_workers = n_workers_user
+            print(f"\n使用指定的工作进程数: {n_workers}\n")
 
-        next_iteration_continuation=1,  # 从第 1 次迭代开始
-        n_workers=None               # 多进程工作进程数，None 表示自动选择（推荐：CPU核心数）
-    )
+        train_alphazero(
+            game_name="gomoku",           # 游戏 Gomoku
+            board_size=15,                # 棋盘大小 (15x15)
+
+            num_iterations=30,           # 30 次训练迭代
+            games_per_iteration=40,       # 每次迭代 40 局游戏
+
+            n_simulations=2000,          # MCTS 2000 次模拟
+            cpuct=1.0,                   # MCTS 的探索/利用平衡因子
+
+            buffer_size=80000,           # 经验回放缓冲区，最多 80,000 个样本（容纳约5次迭代）
+            batch_size=128,               # 每个训练批次 128 个样本
+            epochs_per_iter=3,           # 每次迭代 3 个训练轮次（初期数据质量低，少训练避免过拟合；后期可增加）
+
+            temp_threshold=10,           # 探索温度阈值
+            eval_games=30,               # 30 局评估游戏（提高统计稳定性）
+            eval_mcts_simulations=2000,  # 评估时 MCTS 2000 次模拟
+            win_rate_threshold=0.55,     # 如果候选模型胜率达到 55% 则接受
+
+            model_dir="models",          # 保存模型的目录
+            save_every=1,                # 每次迭代保存模型
+            pretrained_model_path=pretrained_model_path,  # 预训练模型路径（None 表示从头训练）
+
+            next_iteration_continuation=next_iter,  # 从第 1 次迭代开始
+            n_workers=n_workers           # 工作进程数（已在启动阶段确定）
+        )
+    
+    finally:
+        # 恢复标准输出并关闭日志文件
+        if 'tee_output' in locals():
+            sys.stdout = tee_output.terminal
+            sys.stderr = sys.__stderr__
+            tee_output.close()
+            print(f"\n日志已保存到: {log_filepath}")
 

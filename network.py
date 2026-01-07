@@ -28,14 +28,14 @@ class ResidualBlock(nn.Module):
 
 class AlphaZeroNet(nn.Module):
     """
-    Small AlphaZero-style residual network.
+    小型AlphaZero风格的残差网络。
 
-    Params:
-    - in_channels: input channels (3 by default)
+    参数:
+    - in_channels: 输入通道数（默认为3）
     - board_size: H == W == board_size
-    - action_size: number of discrete actions (board_size * board_size)
-    - n_res_blocks: number of residual blocks (tune to trade speed vs performance)
-    - channels: number of convolutional filters in body
+    - action_size: 离散动作数量 (board_size * board_size)
+    - n_res_blocks: 残差块数量（可调整以平衡速度与性能）
+    - channels: 主体中卷积滤波器的数量
     """
 
     def __init__(self,
@@ -50,21 +50,21 @@ class AlphaZeroNet(nn.Module):
         self.action_size = action_size
         self.channels = channels
 
-        # initial conv block
+        # 初始卷积块
         self.conv = nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn = nn.BatchNorm2d(channels)
 
-        # residual tower
+        # 残差塔
         self.res_blocks = nn.ModuleList([ResidualBlock(channels) for _ in range(n_res_blocks)])
 
-        # policy head
-        # small conv -> flatten -> linear to action_size
+        # 策略头
+        # 小卷积 -> 展平 -> 线性层到action_size
         self.policy_conv = nn.Conv2d(channels, 2, kernel_size=1, bias=False)
         self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * board_size * board_size, action_size)
 
-        # value head
-        # small conv -> flatten -> two-layer MLP -> scalar
+        # 价值头
+        # 小卷积 -> 展平 -> 两层MLP -> 标量
         self.value_conv = nn.Conv2d(channels, 1, kernel_size=1, bias=False)
         self.value_bn = nn.BatchNorm2d(1)
         self.value_fc1 = nn.Linear(board_size * board_size, 64)
@@ -73,7 +73,7 @@ class AlphaZeroNet(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        # Kaiming init for convs
+        # 对卷积层使用Kaiming初始化
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
@@ -84,13 +84,13 @@ class AlphaZeroNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Input:
+        输入:
             x: (B, in_channels, H, W) float32
-        Returns:
-            policy_logits: (B, action_size)  (raw logits, before softmax)
-            value: (B, 1) float in [-1,1] after tanh
+        返回:
+            policy_logits: (B, action_size)  (原始logits，在softmax之前)
+            value: (B, 1) float 在tanh之后的值，范围[-1,1]
         """
-        # body
+        # 主体
         out = self.conv(x)
         out = self.bn(out)
         out = F.relu(out)
@@ -98,14 +98,14 @@ class AlphaZeroNet(nn.Module):
         for blk in self.res_blocks:
             out = blk(out)
 
-        # policy head
+        # 策略头
         p = self.policy_conv(out)
         p = self.policy_bn(p)
         p = F.relu(p)
         p = p.view(p.shape[0], -1)
         policy_logits = self.policy_fc(p)  # (B, action_size)
 
-        # value head
+        # 价值头
         v = self.value_conv(out)
         v = self.value_bn(v)
         v = F.relu(v)
@@ -118,12 +118,12 @@ class AlphaZeroNet(nn.Module):
     
     def predict(self, state):
         """
-        Método de previsão que recebe o estado e retorna a política e o valor.
+        预测方法，接收状态并返回策略和价值。
         """
-        # Converte o estado (se ainda for um numpy array) para tensor do PyTorch
-        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)  # Adiciona dimensão extra para batch size (1)
+        # 将状态（如果仍是numpy数组）转换为PyTorch张量
+        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)  # 添加额外的维度用于批次大小(1)
 
-        # Passa o tensor pela rede
+        # 将张量传入网络
         policy_logits, value = self(state_tensor)
 
         return policy_logits, value
@@ -131,10 +131,10 @@ class AlphaZeroNet(nn.Module):
 
 class PyTorchModel:
     """
-    Wrapper around AlphaZeroNet that provides:
+    围绕AlphaZeroNet的包装类，提供:
      - predict(encoded_states) -> (policy_np, value_np)
      - predict_batch(list_of_encoded_states) -> (policy_np, value_np)
-     - train_batch(...) -> loss dict and backprop step
+     - train_batch(...) -> 损失字典和反向传播步骤
      - save / load
     """
 
@@ -163,12 +163,12 @@ class PyTorchModel:
         self.policy_loss_fn = nn.KLDivLoss(reduction='batchmean')  # log_probs vs target probs
 
     # -------------------------
-    # Prediction (batch for MCTS)
+    # 预测（用于MCTS的批次）
     # -------------------------
     def predict(self, encoded_states: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        encoded_states: numpy array (B, C, H, W) float32
-        returns:
+        encoded_states: numpy数组 (B, C, H, W) float32
+        返回:
             policy_probs: np.array (B, action_size) float32
             values: np.array (B, 1) float32
         """
@@ -183,18 +183,18 @@ class PyTorchModel:
         return probs, values
 
     # -------------------------
-    # Convenience: batch from list
+    # 便利方法：从列表创建批次
     # -------------------------
     def predict_batch(self, states_list: list) -> Tuple[np.ndarray, np.ndarray]:
         """
-        states_list: list of np arrays (C,H,W)
-        returns: policy_probs, values as np arrays
+        states_list: np数组列表 (C,H,W)
+        返回: policy_probs, values 作为np数组
         """
         batch = self.make_batch_from_states(states_list)
         return self.predict(batch)
 
     # -------------------------
-    # Single train batch
+    # 单个训练批次
     # -------------------------
     def train_batch(self,
                     states: np.ndarray,
@@ -235,7 +235,7 @@ class PyTorchModel:
         }
 
     # -------------------------
-    # Save / Load
+    # 保存 / 加载
     # -------------------------
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -258,7 +258,7 @@ class PyTorchModel:
                 pass
 
     # -------------------------
-    # Utility: convert list -> batch
+    # 工具方法：将列表转换为批次
     # -------------------------
     @staticmethod
     def make_batch_from_states(list_of_encoded_states: list) -> np.ndarray:

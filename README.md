@@ -93,9 +93,3 @@ python play_loop.py player_alpha player_alpha2 50
 python play_loop.py player_alpha player_mcts 50
 ```
 
-***
-## 团队: NinjaTurtles
-- André Amaral
-- Gabriel Oliveira
-- José Sousa
-- Simão Gomes

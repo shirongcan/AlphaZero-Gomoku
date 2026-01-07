@@ -745,6 +745,7 @@ def train_alphazero(
         model_best.load(pretrained_model_path)  # 加载预训练模型
         model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
         model_candidate.net.load_state_dict(model_best.net.state_dict())
+        model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
         print("预训练模型加载成功。")
     else:
         print("未找到预训练模型。初始化新模型。")
@@ -845,11 +846,30 @@ def train_alphazero(
                 n_batches = max(1, len(buffer) // batch_size)
                 for epoch in range(epochs_per_iter):
                     epoch_t0 = time.time()
+                    
+                    # 累积所有 batch 的 loss
+                    epoch_policy_loss = 0.0
+                    epoch_value_loss = 0.0
+                    epoch_total_loss = 0.0
+                    
                     for b in range(n_batches):
                         states_b, pis_b, zs_b = buffer.sample(batch_size)
                         loss_info = model_candidate.train_batch(states_b, pis_b, zs_b, epochs=1)
+                        
+                        # 累积 loss
+                        epoch_policy_loss += loss_info['policy_loss']
+                        epoch_value_loss += loss_info['value_loss']
+                        epoch_total_loss += loss_info['total_loss']
+                    
+                    # 计算并打印平均 loss
+                    avg_loss = {
+                        'policy_loss': epoch_policy_loss / n_batches,
+                        'value_loss': epoch_value_loss / n_batches,
+                        'total_loss': epoch_total_loss / n_batches
+                    }
+                    
                     epoch_t1 = time.time()
-                    print(f"  epoch {epoch+1}/{epochs_per_iter} finished in {epoch_t1 - epoch_t0:.1f}s, last_loss={loss_info}")
+                    print(f"  epoch {epoch+1}/{epochs_per_iter} finished in {epoch_t1 - epoch_t0:.1f}s, avg_loss={avg_loss}")
             else:
                 print(f"训练样本不足 (buffer={len(buffer)}, 需要 {batch_size})。跳过本次迭代的训练。")
 
@@ -972,19 +992,19 @@ if __name__ == "__main__":
             board_size=15,                # 棋盘大小 (15x15)
 
             num_iterations=30,           # 30 次训练迭代
-            games_per_iteration=40,       # 每次迭代 40 局游戏
+            games_per_iteration=60,       # 每次迭代 40 局游戏
 
             n_simulations=2000,          # MCTS 2000 次模拟
             cpuct=1.0,                   # MCTS 的探索/利用平衡因子
 
-            buffer_size=80000,           # 经验回放缓冲区，最多 80,000 个样本（容纳约5次迭代）
+            buffer_size=60000,           # 经验回放缓冲区，最多 60,000 个样本（容纳约3次迭代）
             batch_size=128,               # 每个训练批次 128 个样本
-            epochs_per_iter=3,           # 每次迭代 3 个训练轮次（初期数据质量低，少训练避免过拟合；后期可增加）
+            epochs_per_iter=5,           # 每次迭代 3 个训练轮次（初期数据质量低，少训练避免过拟合；后期可增加）
 
             temp_threshold=10,           # 探索温度阈值
-            eval_games=30,               # 30 局评估游戏（提高统计稳定性）
+            eval_games=40,               # 30 局评估游戏（提高统计稳定性）
             eval_mcts_simulations=2000,  # 评估时 MCTS 2000 次模拟
-            win_rate_threshold=0.55,     # 如果候选模型胜率达到 55% 则接受
+            win_rate_threshold=0.52,     # 如果候选模型胜率达到 50.3% 则接受
 
             model_dir="models",          # 保存模型的目录
             save_every=1,                # 每次迭代保存模型

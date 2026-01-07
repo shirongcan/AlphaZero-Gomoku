@@ -36,6 +36,38 @@ STATE_PLAYING = "playing"
 MENU_BG_IMAGE_PATH = "interface_menus/menu3.webp"
 
 
+def get_chinese_font(size, bold=False):
+    """
+    获取支持中文的字体。尝试多个中文字体，如果都失败则使用系统默认字体。
+    """
+    # Windows系统常见的中文字体列表（按优先级排序）
+    chinese_fonts = [
+        "Microsoft YaHei",  # 微软雅黑
+        "SimHei",           # 黑体
+        "SimSun",           # 宋体
+        "KaiTi",            # 楷体
+        "FangSong",         # 仿宋
+    ]
+    
+    # 尝试加载中文字体
+    for font_name in chinese_fonts:
+        try:
+            font = pygame.font.SysFont(font_name, size, bold=bold)
+            # 测试字体是否能渲染中文
+            test_surf = font.render("测试", True, (255, 255, 255))
+            if test_surf.get_width() > 0:  # 如果能渲染，说明字体支持中文
+                return font
+        except Exception:
+            continue
+    
+    # 如果所有中文字体都失败，尝试使用系统默认字体
+    try:
+        return pygame.font.SysFont(None, size, bold=bold)
+    except Exception:
+        # 最后的回退：使用pygame默认字体
+        return pygame.font.Font(None, size)
+
+
 class HumanGUIPlayer:
     def __init__(self, name="Human"):
         self.name = name
@@ -232,14 +264,14 @@ def get_player_label(choice_key, idx):
 
 def main():
     pygame.init()
-    pygame.display.set_caption("Lab IACD")
+    pygame.display.set_caption("五子棋")
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
 
-    title_font = pygame.font.SysFont("arial", 70, bold=True)
-    menu_font = pygame.font.SysFont("arial", 28, bold=True)
-    small_font = pygame.font.SysFont("arial", 22)
-    tiny_font = pygame.font.SysFont("arial", 18)
+    title_font = get_chinese_font(70, bold=True)
+    menu_font = get_chinese_font(28, bold=True)
+    small_font = get_chinese_font(22)
+    tiny_font = get_chinese_font(18)
 
     # tentar carregar imagem de fundo do menu (opcional)
     menu_bg = None
@@ -533,15 +565,17 @@ def main():
         else:
             screen.fill(BG_COLOR)
 
+       
         if state == STATE_GAME_SELECT:
+
             # background de imagem se existir
             if menu_bg is not None:
                 screen.blit(menu_bg, (0, 0))
 
             pulse = (math.sin(t * 2.0) + 1) / 2  # 0..1
-            draw_centered_text(screen, "Lab IACD Project 2", title_font, 120,
+            draw_centered_text(screen, "五子棋", title_font, 120,
                                ACCENT_COLOR, pulse=pulse)
-            draw_centered_text(screen, "Select your game", menu_font, 180)
+            draw_centered_text(screen, "选择你的游戏", menu_font, 180)
 
             for b in buttons:
                 b.draw(screen, mouse_pos)
@@ -679,9 +713,9 @@ def run_mirror(
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
 
-    title_font = pygame.font.SysFont("arial", 70, bold=True)
-    small_font = pygame.font.SysFont("arial", 22)
-    tiny_font = pygame.font.SysFont("arial", 18)
+    title_font = get_chinese_font(70, bold=True)
+    small_font = get_chinese_font(22)
+    tiny_font = get_chinese_font(18)
 
     # background image (same as main)
     menu_bg = None

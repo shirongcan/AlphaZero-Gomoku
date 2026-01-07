@@ -11,7 +11,7 @@ class Player:
                  board_size=15,
                  n_simulations=3000,
                  c_puct=1.0,
-                 model_path="models_pente/model_best_iter82_20251206_141641.pt",
+                 model_path="models/snapshot_iter37_20260107_142937.pt",
                  nn_model=PyTorchModel):
         
         self.rules = rules.lower()

@@ -10,7 +10,6 @@ from network import PyTorchModel
 from mcts.new_mcts_alpha import MCTS
 from players.player_alpha import Player
 from games.gomoku import Gomoku as GameClass
-from games.pente import Pente as GameClass
 from datetime import datetime
 from copy import deepcopy
 import sys
@@ -156,13 +155,23 @@ def play_game_and_collect(mcts: MCTS, game, temp_fn, max_moves=225, use_symmetri
     while True:
         state_enc = game.get_encoded_state()  # 期望是视角不变的
         pi = mcts.run(game, len(game.move_history))  # 向量 (action_size,)
+        
+        # 确保策略只包含合法动作并归一化
+        valid_mask = game.get_valid_moves()
+        pi = pi * valid_mask
+        pi_sum = np.sum(pi)
+        if pi_sum > 1e-8:
+            pi = pi / pi_sum
+        else:
+            # 如果所有动作都被掩码（不应该发生），使用均匀分布
+            pi = valid_mask / (np.sum(valid_mask) + 1e-8)
+        
         pi_for_store = pi.copy()
 
         temp = temp_fn(move_number)
         action = sample_action_from_pi(pi, temp)
 
         # 安全回退：如果选择的动作不合法，使用 argmax
-        valid_mask = game.get_valid_moves()
         if valid_mask[action] != 1.0:
             action = int(np.argmax(pi))
         # 存储 (state, pi, player)
@@ -215,7 +224,6 @@ def _worker_play_game(args):
     
     # 导入必要的模块（在子进程中）
     from games.gomoku import Gomoku
-    from games.pente import Pente
     from network import PyTorchModel
     from mcts.new_mcts_alpha import MCTS
     
@@ -235,11 +243,8 @@ def _worker_play_game(args):
         p = softmax_temperature(pi, temp)
         return int(np.random.choice(len(p), p=p))
     
-    # 选择游戏类
-    if game_name.lower().startswith("pente"):
-        GameClass = Pente
-    else:
-        GameClass = Gomoku
+    # 只使用Gomoku（仅进行Gomoku训练）
+    GameClass = Gomoku
     
     # 创建模型并加载权重
     action_size = board_size * board_size
@@ -273,13 +278,23 @@ def _worker_play_game(args):
     while True:
         state_enc = game.get_encoded_state()
         pi = mcts.run(game, len(game.move_history))
+        
+        # 确保策略只包含合法动作并归一化
+        valid_mask = game.get_valid_moves()
+        pi = pi * valid_mask
+        pi_sum = np.sum(pi)
+        if pi_sum > 1e-8:
+            pi = pi / pi_sum
+        else:
+            # 如果所有动作都被掩码（不应该发生），使用均匀分布
+            pi = valid_mask / (np.sum(valid_mask) + 1e-8)
+        
         pi_for_store = pi.copy()
         
         temp = temp_fn(move_number)
         action = sample_action_from_pi(pi, temp)
         
         # 安全回退
-        valid_mask = game.get_valid_moves()
         if valid_mask[action] != 1.0:
             action = int(np.argmax(pi))
         
@@ -481,15 +496,11 @@ def _worker_evaluate_game(args):
     
     # 导入必要的模块（在子进程中）
     from games.gomoku import Gomoku
-    from games.pente import Pente
     from network import PyTorchModel
     from mcts.new_mcts_alpha import MCTS
     
-    # 选择游戏类
-    if game_name.lower().startswith("pente"):
-        GameClass = Pente
-    else:
-        GameClass = Gomoku
+    # 只使用Gomoku（仅进行Gomoku训练）
+    GameClass = Gomoku
     
     # 创建模型并加载权重
     action_size = board_size * board_size
@@ -736,7 +747,7 @@ def train_alphazero(
     os.makedirs(training_data_dir, exist_ok=True)
 
     # 根据 board_size 计算动作空间大小
-    action_size = board_size * board_size  # 对于 Gomoku（或 Pente），动作是棋盘上的位置
+    action_size = board_size * board_size  # 对于 Gomoku，动作是棋盘上的位置
 
     # 检查是否存在预训练模型
     if pretrained_model_path and os.path.exists(pretrained_model_path):
@@ -991,8 +1002,8 @@ if __name__ == "__main__":
             game_name="gomoku",           # 游戏 Gomoku
             board_size=15,                # 棋盘大小 (15x15)
 
-            num_iterations=30,           # 30 次训练迭代
-            games_per_iteration=60,       # 每次迭代 40 局游戏
+            num_iterations=100,           # 30 次训练迭代
+            games_per_iteration=60,       # 每次迭代 60 局游戏
 
             n_simulations=2000,          # MCTS 2000 次模拟
             cpuct=1.0,                   # MCTS 的探索/利用平衡因子

@@ -11,7 +11,7 @@ class Player:
                  board_size=15,
                  n_simulations=3000,
                  c_puct=1.0,
-                 model_path="models/snapshot_iter37_20260107_142937.pt",
+                 model_path="models/snapshot_iter60_20260107_172300.pt",
                  nn_model=PyTorchModel):
         
         self.rules = rules.lower()
@@ -64,16 +64,31 @@ class Player:
             game.board = np.copy(board.board)
 
         # Define o jogador atual (baseado no número do turno)
-        game.current_player = 1 if turn_number % 2 == 0 else 2
+        # turn_number começa em 1: 1,3,5... → jogador 1; 2,4,6... → jogador 2
+        game.current_player = 1 if turn_number % 2 == 1 else 2
 
         # Último movimento
         game.last_move = last_opponent_move
 
         # Executa o MCTS para obter a política (probabilidades das jogadas)
-        pi = self.mcts.run(game,turn_number)
+        pi = self.mcts.run(game, turn_number)
 
         # Escolhe a melhor ação com base na política
         action = np.argmax(pi)
+        
+        # Segurança: verificar se a ação é legal
+        valid_moves = game.get_valid_moves()
+        if valid_moves[action] != 1.0:
+            # Se a ação escolhida não é legal, escolha qualquer ação legal
+            print(f"⚠️ Aviso: Ação {action} não é legal, escolhendo outra...")
+            legal_actions = np.where(valid_moves == 1.0)[0]
+            if len(legal_actions) > 0:
+                # Escolher a ação legal com maior probabilidade
+                legal_pi = pi * valid_moves
+                action = np.argmax(legal_pi)
+            else:
+                print("❌ Erro: Nenhuma ação legal disponível!")
+                return None
+        
         r, c = divmod(action, self.board_size)
-
         return (r, c)

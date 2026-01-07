@@ -131,11 +131,10 @@ class Gomoku:
         """
         Retorna o estado codificado para a rede AlphaZero: np.array [C, H, W]
         C = 3:
-          - canal 0: peças do jogador 1 (1.0/0.0)
-          - canal 1: peças do jogador 2 (1.0/0.0)
-          - canal 2: turno (toda a matriz preenchida com 1.0 se current_player == 1, 0.0 caso contrário)
-        Observação: isto corresponde à tua especificação inicial. Se quiseres
-        perspectiva invariance (sempre 'eu' = canal0), avisa que eu mudo.
+          - canal 0: peças do jogador atual (1.0/0.0)
+          - canal 1: peças do jogador oponente (1.0/0.0)
+          - canal 2: turno (1.0 se current_player == 1, 0.0 se current_player == 2)
+        Esta codificação é perspectiva-invariant: sempre do ponto de vista do jogador atual.
         """
         board = self.board
         size = self.size
@@ -145,7 +144,9 @@ class Gomoku:
 
         p_cur = (board == player).astype(np.float32)
         p_opp = (board == opponent).astype(np.float32)
-        turn = np.full((size, size), 1.0, dtype=np.float32)  # opcionalmente 1.0 sempre
+        # turn通道：1.0表示玩家1，0.0表示玩家2
+        turn_value = 1.0 if player == 1 else 0.0
+        turn = np.full((size, size), turn_value, dtype=np.float32)
 
         return np.stack([p_cur, p_opp, turn], axis=0)
 

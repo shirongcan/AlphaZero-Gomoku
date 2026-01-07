@@ -890,7 +890,7 @@ def train_alphazero(
                 print(f" Saved snapshot: {snapshot_path}")
 
             t1 = time.time()
-            print(f"迭代 {it} 完成，耗时 {(t1 - t0):.1f}s。本次迭代获胜者: {winners}")
+            print(f"迭代 {it} 完成，耗时 {(t1 - t0)/60:.1f}分钟。本次迭代获胜者: {winners}")
     
     except KeyboardInterrupt:
         print("\n\n=== 训练被用户中断 (CTRL-C) ===")

@@ -82,6 +82,9 @@ python play.py --game pente --model models_pente/best_model.pt
 
 # 使用 GUI
 python interface_pygame.py
+
+# 仅五子棋（Gomoku）GUI（无 Pente）
+python interface_gomoku.py
 ```
 
 ### 模型评估

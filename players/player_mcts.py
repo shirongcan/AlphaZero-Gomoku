@@ -5,6 +5,7 @@ import numpy as np
 from mcts.mcts_pure import MCTSGomoku, MCTSPente
 from games.pente import Pente
 from games.gomoku import Gomoku
+from players.utils import infer_current_player, infer_last_move
 
 class Player:
 
@@ -34,9 +35,9 @@ class Player:
         else:
             game.board = np.copy(board.board)
 
-        # define jogador atual
-        game.current_player = 1 if turn_number % 2 == 0 else 2
-        game.last_move = last_opponent_move
+        # 关键：以“真实棋盘状态”为准，避免 turn_number 口径不一致导致视角错乱
+        game.current_player = infer_current_player(board, game.board)
+        game.last_move = infer_last_move(board, last_opponent_move)
 
         # procura a melhor jogada via MCTS
         move = self.mcts.get_move(game)

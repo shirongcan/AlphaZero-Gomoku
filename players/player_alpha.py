@@ -4,6 +4,7 @@ from mcts.new_mcts_alpha import MCTS
 from network import PyTorchModel
 from games.pente import Pente
 from games.gomoku import Gomoku
+from players.utils import infer_current_player, infer_last_move, infer_move_number
 
 class Player:
     def __init__(self,
@@ -11,7 +12,7 @@ class Player:
                  board_size=15,
                  n_simulations=3000,
                  c_puct=1.0,
-                 model_path="models/snapshot_iter37_20260107_142937.pt",
+                 model_path="models/snapshot_iter16_20260107_223122.pt",
                  nn_model=PyTorchModel):
         
         self.rules = rules.lower()
@@ -63,14 +64,13 @@ class Player:
         else:
             game.board = np.copy(board.board)
 
-        # Define o jogador atual (baseado no número do turno)
-        game.current_player = 1 if turn_number % 2 == 0 else 2
-
-        # Último movimento
-        game.last_move = last_opponent_move
+        # 关键：以“真实棋盘状态”为准，避免 turn_number 口径不一致导致视角错乱
+        game.current_player = infer_current_player(board, game.board)
+        game.last_move = infer_last_move(board, last_opponent_move)
+        move_number = infer_move_number(board, game.board)
 
         # Executa o MCTS para obter a política (probabilidades das jogadas)
-        pi = self.mcts.run(game,turn_number)
+        pi = self.mcts.run(game, move_number)
 
         # Escolhe a melhor ação com base na política
         action = np.argmax(pi)

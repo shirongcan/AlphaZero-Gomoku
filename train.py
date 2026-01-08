@@ -134,11 +134,8 @@ def evaluate_models(model_new: PyTorchModel,
     在 model_new 和 model_best 之间进行 n_games 局游戏（轮流先手）。
     返回 (win_rate_of_new, draws)
     """
-    # 选择游戏类
-    if game_name.lower().startswith("pente"):
-        rules_name = "pente"
-    else:
-        rules_name = "gomoku"
+    # 仅支持 Gomoku（保留 game_name 参数用于向后兼容）
+    rules_name = "gomoku"
 
     new_wins = 0
     draws = 0
@@ -220,7 +217,7 @@ def train_alphazero(
     os.makedirs(model_dir, exist_ok=True)
 
     # 根据 board_size 计算动作空间大小
-    action_size = board_size * board_size  # 对于 Gomoku（或 Pente），动作是棋盘上的位置
+    action_size = board_size * board_size  # 对于 Gomoku，动作是棋盘上的位置
 
     # 检查是否存在预训练模型
     if pretrained_model_path and os.path.exists(pretrained_model_path):

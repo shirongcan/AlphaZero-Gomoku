@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 
 from games.gomoku import Gomoku
-from games.pente import Pente
 
 METRICS = Path("metrics")
 RED = "\033[31m"
@@ -31,17 +30,8 @@ def load_player(module_name, rules, size):
 
 # ====== GAME MENU ======
 def choose_game():
-    print("\n=== Escolha o Jogo ===")
-    print("1. Gomoku")
-    print("2. Pente")
-    while True:
-        choice = input("Jogo: ").strip()
-        if choice == "1":
-            return "gomoku"
-        elif choice == "2":
-            return "pente"
-        else:
-            print("Opção inválida. Escolha 1 ou 2.")
+    # Projeto agora suporta apenas Gomoku
+    return "gomoku"
 
 def change_starting_player(player1_name, player2_name, game, game_name, size, metrics, game_iter):
     # Carrega os jogadores
@@ -215,10 +205,7 @@ def loop_for_n_games():
 
     # Inicializa o jogo
     for i in range(n_games):
-        if game_name == "gomoku":
-            game = Gomoku(size)
-        else:
-            game = Pente(size)
+        game = Gomoku(size)
         
         if i % 2 == 0:
             game_start_time = time.time()

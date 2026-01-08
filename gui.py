@@ -6,7 +6,6 @@ import os
 import subprocess
 
 from games.gomoku import Gomoku
-from games.pente import Pente
 
 # =========================================================================== #
 #               Para jogar usando o play.py digite no terminal:               #
@@ -34,17 +33,8 @@ def load_player(module_name, rules, size):
 
 # ====== GAME MENU ======
 def choose_game():
-    print("\n=== Escolha o Jogo ===")
-    print("1. Gomoku")
-    print("2. Pente")
-    while True:
-        choice = input("Jogo: ").strip()
-        if choice == "1":
-            return "gomoku"
-        elif choice == "2":
-            return "pente"
-        else:
-            print("Opção inválida. Escolha 1 ou 2.")
+    # Projeto agora suporta apenas Gomoku
+    return "gomoku"
 
 # ====== MAIN ======
 def main():
@@ -60,10 +50,7 @@ def main():
     size = 15
 
     # Inicializa o jogo
-    if game_name == "gomoku":
-        game = Gomoku(size)
-    else:
-        game = Pente(size)
+    game = Gomoku(size)
 
     # Carrega os jogadores
     player1 = load_player(player1_name, game_name, size)

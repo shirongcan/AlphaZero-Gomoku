@@ -2,7 +2,6 @@ import numpy as np
 import torch
 from mcts.new_mcts_alpha import MCTS
 from network import PyTorchModel
-from games.pente import Pente
 from games.gomoku import Gomoku
 
 class Player:
@@ -11,7 +10,7 @@ class Player:
                  board_size=15,
                  n_simulations=3000,
                  c_puct=1.0,
-                 model_path="models_pente/snapshot_iter83_20251207_091724.pt",
+                 model_path="models/snapshot_iter83_20251207_091724.pt",
                  nn_model=PyTorchModel):
         
         self.rules = rules.lower()
@@ -32,11 +31,10 @@ class Player:
         # 2) Colocar o modelo em modo de avaliação
         self.net.net.eval()  # Usando o eval() no AlphaZeroNet dentro do PyTorchModel
 
-        # 3) Definir o jogo (Gomoku ou Pente)
-        if self.rules == "pente":
-            self.game_class = Pente
-        else:
-            self.game_class = Gomoku
+        # 3) Definir o jogo (apenas Gomoku)
+        if self.rules != "gomoku":
+            raise ValueError(f"Unsupported rules: {self.rules}. Only 'gomoku' is supported.")
+        self.game_class = Gomoku
 
         # 4) Criar o MCTS
         self.mcts = MCTS(

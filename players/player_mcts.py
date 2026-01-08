@@ -2,8 +2,7 @@ import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import numpy as np
-from mcts.mcts_pure import MCTSGomoku, MCTSPente
-from games.pente import Pente
+from mcts.mcts_pure import MCTSGomoku
 from games.gomoku import Gomoku
 
 class Player:
@@ -14,19 +13,15 @@ class Player:
         self.board_size = board_size
         self.n_playout = n_playout
 
-        # escolher o MCTS / heurísticas mais adequadas conforme o tipo de jogo que for
-        if (self.rules == "gomoku"):
-            self.mcts = MCTSGomoku(n_playout=n_playout, c_puct=c_puct)
-        else:
-            self.mcts = MCTSPente(n_playout=n_playout, c_puct=c_puct)
+        # Projeto agora suporta apenas Gomoku
+        if self.rules != "gomoku":
+            raise ValueError(f"Unsupported rules: {self.rules}. Only 'gomoku' is supported.")
+        self.mcts = MCTSGomoku(n_playout=n_playout, c_puct=c_puct)
 
     def play(self, board, turn_number, last_opponent_move):
 
-        # importa o jogo correto
-        if self.rules == "pente":
-            game = Pente(size=self.board_size)
-        else:
-            game = Gomoku(size=self.board_size)
+        # importa o jogo correto (apenas Gomoku)
+        game = Gomoku(size=self.board_size)
 
         # copia o estado atual do tabuleiro
         if isinstance(board, list):

@@ -82,7 +82,7 @@ class MCTS:
             game_copy = game_state.clone()  # 克隆当前状态，避免修改原始状态
             self.search(game_copy, move_number)  # 搜索当前状态，返回一个值，这个值是当前状态的评估值
 
-        # processar quaisquer estados remanescentes
+        # 处理所有剩余的状态
         self._predict_batch(move_number)
 
         s_key = self._state_key(game_state)

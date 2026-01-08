@@ -323,7 +323,7 @@ if __name__ == "__main__":
         game_name="gomoku",           # 游戏 Gomoku
         board_size=15,                # 棋盘大小 (15x15)
 
-        num_iterations=50,           # 30 次训练迭代
+        num_iterations=100,           # 30 次训练迭代
         games_per_iteration=70,       # 每次迭代 40 局游戏
 
         n_simulations=800,          # MCTS 2000 次模拟
@@ -334,9 +334,9 @@ if __name__ == "__main__":
         epochs_per_iter=5,           # 每次迭代 5 个训练轮次（GPU快时可增加）
 
         temp_threshold=10,           # 探索温度阈值
-        eval_games=30,               # 30 局评估游戏（提高统计稳定性）
+        eval_games=50,               # 30 局评估游戏（提高统计稳定性）
         eval_mcts_simulations=800,  # 评估时 MCTS 2000 次模拟
-        win_rate_threshold=0.5,     # 如果候选模型胜率达到 55% 则接受
+        win_rate_threshold=0.52,     # 如果候选模型胜率达到 55% 则接受
 
         model_dir="models",          # 保存模型的目录
         save_every=1,                # 每次迭代保存模型

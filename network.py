@@ -194,6 +194,37 @@ class PyTorchModel:
         return self.predict(batch)
 
     # -------------------------
+    # 工具方法：从状态编码推断合法动作
+    # -------------------------
+    @staticmethod
+    def get_valid_moves_from_state(state: np.ndarray) -> np.ndarray:
+        """
+        从状态编码推断合法动作。
+        状态编码格式: [C, H, W]，其中C=3
+        - 通道0: 当前玩家的棋子
+        - 通道1: 对手的棋子
+        - 通道2: turn信息
+        如果某个位置的通道0和通道1都是0，则该位置是空的（合法动作）。
+        """
+        # state shape: (C, H, W) 或 (B, C, H, W)
+        if len(state.shape) == 3:
+            state = state[np.newaxis, ...]  # 添加batch维度
+        
+        batch_size, channels, height, width = state.shape
+        action_size = height * width
+        
+        # 获取每个位置的占用情况：通道0或通道1有值的位置被占用
+        occupied = (state[:, 0, :, :] > 0.5) | (state[:, 1, :, :] > 0.5)  # (B, H, W)
+        
+        # 合法动作：未被占用的位置
+        valid_moves = (~occupied).astype(np.float32)  # (B, H, W)
+        valid_moves = valid_moves.reshape(batch_size, action_size)  # (B, action_size)
+        
+        if len(state.shape) == 3:
+            return valid_moves[0]  # 移除batch维度
+        return valid_moves
+
+    # -------------------------
     # 单个训练批次
     # -------------------------
     def train_batch(self,
@@ -206,6 +237,14 @@ class PyTorchModel:
         target_pis_t = torch.from_numpy(target_pis.astype(np.float32)).to(self.device)
         target_vs_t = torch.from_numpy(target_vs.astype(np.float32)).to(self.device)
 
+        # 从状态编码推断合法动作掩码
+        valid_moves = self.get_valid_moves_from_state(states)  # (B, action_size)
+        valid_moves_t = torch.from_numpy(valid_moves.astype(np.float32)).to(self.device)
+        
+        # 确保目标策略只包含合法动作（归一化）
+        target_pis_t = target_pis_t * valid_moves_t
+        target_pis_t = target_pis_t / (target_pis_t.sum(dim=1, keepdim=True) + 1e-8)
+
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_loss = 0.0
@@ -213,7 +252,12 @@ class PyTorchModel:
         for _ in range(epochs):
             self.optimizer.zero_grad()
             logits, values = self.net(states_t)
-            log_probs = F.log_softmax(logits, dim=1)
+            
+            # 对logits应用掩码：将非法动作的logits设为负无穷大
+            masked_logits = logits.clone()
+            masked_logits = masked_logits - (1.0 - valid_moves_t) * 1e9
+            
+            log_probs = F.log_softmax(masked_logits, dim=1)
 
             policy_loss = self.policy_loss_fn(log_probs, target_pis_t)
             value_loss = self.value_loss_fn(values, target_vs_t)

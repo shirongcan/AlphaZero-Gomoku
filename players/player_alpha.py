@@ -12,7 +12,8 @@ class Player:
                  board_size=15,
                  n_simulations=3000,
                  c_puct=1.0,
-                 model_path="models/snapshot_iter16_20260107_223122.pt",
+                 # 默认使用仓库中实际存在的 best 模型（避免合并冲突分支里引用不存在的 snapshot）
+                 model_path="models/model_best_iter131_20260108_140058.pt",
                  nn_model=PyTorchModel):
         
         self.rules = rules.lower()
@@ -74,6 +75,20 @@ class Player:
 
         # Escolhe a melhor ação com base na política
         action = np.argmax(pi)
+        
+        # Segurança: verificar se a ação é legal
+        valid_moves = game.get_valid_moves()
+        if valid_moves[action] != 1.0:
+            # Se a ação escolhida não é legal, escolha qualquer ação legal
+            print(f"⚠️ Aviso: Ação {action} não é legal, escolhendo outra...")
+            legal_actions = np.where(valid_moves == 1.0)[0]
+            if len(legal_actions) > 0:
+                # Escolher a ação legal com maior probabilidade
+                legal_pi = pi * valid_moves
+                action = np.argmax(legal_pi)
+            else:
+                print("❌ Erro: Nenhuma ação legal disponível!")
+                return None
+        
         r, c = divmod(action, self.board_size)
-
         return (r, c)

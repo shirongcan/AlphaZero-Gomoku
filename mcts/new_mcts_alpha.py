@@ -86,13 +86,22 @@ class MCTS:
 
         s_key = self._state_key(game_state)
         counts = self.N[s_key]
+        valid = self.children[s_key]
+        
+        # 确保只考虑合法动作
+        counts = counts * valid
         total = np.sum(counts)
+        
         if total > 0:
             pi = counts / total
         else:
             # fallback seguro: uniformemente entre ações válidas
-            valid = self.children[s_key]
-            pi = valid / np.sum(valid)
+            pi = valid / (np.sum(valid) + 1e-8)
+        
+        # 再次确保只包含合法动作并归一化（安全措施）
+        pi = pi * valid
+        pi = pi / (np.sum(pi) + 1e-8)
+        
         return pi
 
     # -------------------------

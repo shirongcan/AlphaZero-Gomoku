@@ -3,10 +3,10 @@ import math
 
 class MCTS:
     """
-    Monte Carlo Tree Search para AlphaZero com batch prediction.
-    - Adaptado aos jogos Gomoku e Pente.
-    - Usa política + valor da rede neural.
-    - Suporta simetrias (rotação + flip horizontal).
+    基于AlphaZero的蒙特卡洛树搜索(MCTS)，支持批量预测。
+    - 针对Gomoku（五子棋）和Pente（同类棋类游戏）进行了适配。
+    - 使用神经网络的策略（policy）和价值（value）输出。
+    - 支持对称变换（旋转与水平翻转）。
     """
 
     def __init__(self, game_class, n_simulations, nn_model, cpuct=1.0, batch_size=32, dirichlet_alpha=0.03, epsilon=0.03, apply_dirichlet_n_first_moves=10, add_dirichlet_noise=True):
@@ -75,11 +75,12 @@ class MCTS:
     #  MCTS RUN
     # -------------------------
     def run(self, game_state, move_number):
-        self.root_key = self._state_key(game_state)
-
+        self.root_key = self._state_key(game_state) # 获取当前状态的键，是bytes类型 ，是唯一标识当前状态的键，里面有棋盘数据和当前玩家
+    
+        # 进行N次模拟
         for _ in range(self.n_simulations):
-            game_copy = game_state.clone()
-            self.search(game_copy, move_number)
+            game_copy = game_state.clone()  # 克隆当前状态，避免修改原始状态
+            self.search(game_copy, move_number)  # 搜索当前状态，返回一个值，这个值是当前状态的评估值
 
         # processar quaisquer estados remanescentes
         self._predict_batch(move_number)
@@ -99,51 +100,53 @@ class MCTS:
     #  SEARCH
     # -------------------------
     def search(self, game_state, move_number):
-        s_key = self._state_key(game_state)
+        s_key = self._state_key(game_state) # 获取当前状态的键，是bytes类型 ，是唯一标识当前状态的键，里面有棋盘数据和当前玩家
 
         # Verificar se o jogo terminou (ganhador ou sem movimentos válidos)
         if game_state.is_game_over():
             winner = game_state.get_winner()
             if winner == 0:
                 return 0
-            return 1 if winner == game_state.current_player else -1
+            # 当前玩家还没有下棋，既然分出胜负，说明上一步的对手赢了。
+            # 对于当前轮到的玩家来说，这是必输的局面，直接返回 -1。
+            return -1
 
-        if s_key not in self.P:
+        if s_key not in self.P: # 如果当前状态的键不在P中，表示当前状态没有被访问过
             # adiciona à fila de batch
             self.pending_states.append(game_state.get_encoded_state())
             self.pending_keys.append(s_key)
-            self.pending_game_states.append(game_state.clone())  # <--- armazenar o estado completo
+            self.pending_game_states.append(game_state.clone())  # 将当前状态克隆并添加到pending_game_states中
 
             # se a fila encheu, processa em batch
             if len(self.pending_states) >= self.batch_size:
-                self._predict_batch(move_number)
+                self._predict_batch(move_number) # 预测当前状态的值和策略
 
-            # fallback: se ainda não foi processado, inicializa uniformemente
+            #  
             if s_key not in self.P:
                 valid = game_state.get_valid_moves()
-                self.P[s_key] = valid / np.sum(valid)
-                self.V[s_key] = 0
-                self.N[s_key] = np.zeros_like(valid, dtype=np.float32)
-                self.W[s_key] = np.zeros_like(valid, dtype=np.float32)
-                self.children[s_key] = valid
+                self.P[s_key] = valid / np.sum(valid) # 将当前状态的合法动作归一化，得到每个位置的概率
+                self.V[s_key] = 0 # 当前状态的评估值为0
+                self.N[s_key] = np.zeros_like(valid, dtype=np.float32) # 当前状态的访问次数为0
+                self.W[s_key] = np.zeros_like(valid, dtype=np.float32) # 当前状态的奖励值为0
+                self.children[s_key] = valid # 将当前状态的合法动作添加到当前状态的子节点中
                 return self.V[s_key]
 
-        # já visitado → UCB
-        valid = self.children[s_key]
-        sqrt_sum = math.sqrt(np.sum(self.N[s_key]))
+        # 已访问过的节点 → UCB选择
+        valid = self.children[s_key] # 获取当前状态的合法动作 就是所有合法的位置，是一个二进制向量，长度为 action_size
+        sqrt_sum = math.sqrt(np.sum(self.N[s_key])) # 计算当前状态的访问次数的平方根
         ucb = self.W[s_key] / (1 + self.N[s_key]) + self.cpuct * self.P[s_key] * sqrt_sum / (1 + self.N[s_key])
-        ucb = np.where(valid == 1, ucb, -1e9)
+        ucb = np.where(valid == 1, ucb, -1e9) # 将当前状态的合法动作设置为UCB值，否则设置为-1e9
 
-        action = np.argmax(ucb)
-        r, c = divmod(action, game_state.size)
+        action = np.argmax(ucb) # 选择UCB值最大的动作
+        r, c = divmod(action, game_state.size) # 将动作转换为(r,c)坐标
         
-        # Realizar a jogada, tratando as capturas no caso do Pente
-        game_state.do_move((r, c))  # Aqui é onde a captura de peças será tratada
+        # 执行落子操作
+        game_state.do_move((r, c))   
 
-        v = -self.search(game_state, move_number)
+        v = -self.search(game_state, move_number) # 递归搜索下一个状态，返回下一个状态的评估值
 
-        self.W[s_key][action] += v
-        self.N[s_key][action] += 1
+        self.W[s_key][action] += v # 更新当前状态的奖励值
+        self.N[s_key][action] += 1 # 更新当前状态的访问次数
 
         return v
 
@@ -185,6 +188,10 @@ class MCTS:
     #  STATE KEY
     # -------------------------
     def _state_key(self, game_state):
-        board = game_state.board
-        player = game_state.current_player
-        return board.tobytes() + bytes([player])
+        board = game_state.board # 获取棋盘数据 (NumPy 数组)
+        player = game_state.current_player # 获取当前执棋玩家 (整数)
+        # 1. board.tobytes(): 将 NumPy 数组转换为不可变的字节串。
+        #    NumPy 数组是可变的(mutable)，不能直接作为字典的键，必须转为 bytes。
+        # 2. bytes([player]): 将玩家 ID 转换为字节。
+        # 3. + : 将两者拼接。
+        return board.tobytes() + bytes([player]) 

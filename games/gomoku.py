@@ -4,17 +4,17 @@ from typing import List, Tuple, Optional
 
 class Gomoku:
     """
-    Implementação do jogo Gomoku (15x15 por defeito).
-    - Vitória: 5 em linha (horizontal, vertical, diagonal)
-    - Estado interno:
-        board : np.array (size x size) com {0: vazio, 1: jogador1, 2: jogador2}
-        current_player : 1 ou 2
-        move_history : lista de (r,c) jogadas aplicadas na ordem
-        last_move : última jogada (r,c) ou None
-    Notas para AlphaZero/MCTS:
+    五子棋游戏的实现（默认15x15）。
+    - 获胜条件：横、竖、斜方向连成5子
+    - 内部状态说明：
+        board : np.array (size x size)，0代表空，1代表玩家1，2代表玩家2
+        current_player : 当前行动玩家，1或2
+        move_history : 已执行落子的(r,c)坐标列表
+        last_move : 上一步的坐标(r,c)，或None
+    AlphaZero/MCTS相关说明:
     - action_size = size * size
-    - get_valid_moves() retorna vetor binário (float32) de dimensão action_size
-    - action index = r * size + c
+    - get_valid_moves() 返回长度为 action_size 的二进制(float32)向量
+    - action 索引 = r * size + c
     """
 
     def __init__(self, size: int = 15):
@@ -50,7 +50,7 @@ class Gomoku:
         return (r, c)
 
     def move_to_action(self, move: Tuple[int, int]) -> int:
-        """Converte (r,c) para action index."""
+        """将 (r,c) 坐标转换为 action 索引。"""
         r, c = move
         return int(r * self.size + c)
 
@@ -108,13 +108,13 @@ class Gomoku:
 
     def get_valid_moves(self) -> np.ndarray:
         """
-        Retorna um vetor binário (float32) de dimensão action_size.
-        - 1.0 onde a ação é legal, 0.0 onde é ilegal.
-        Este formato é o que a rede + MCTS esperam (policy mask).
+        返回一个二进制向量（float32），长度为 action_size。
+        - 合法动作对应位置为 1.0，非法动作为 0.0。
+        这个格式是网络和 MCTS 所期望的（策略掩码）。
         """
         valid = np.zeros(self.action_size, dtype=np.float32)
         empties = np.where(self.board == 0)
-        # zip devolve pares (r,c)
+        # zip 返回 (r,c) 对
         for r, c in zip(empties[0], empties[1]):
             idx = self.move_to_action((int(r), int(c)))
             valid[idx] = 1.0

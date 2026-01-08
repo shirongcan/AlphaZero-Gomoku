@@ -5,15 +5,10 @@ from collections import deque
 from typing import List, Tuple, Optional
 import numpy as np
 from network import PyTorchModel
-# from mcts.mcts_alpha import MCTS
-# from mcts.mcts_alpha_with_noise import MCTS
 from mcts.new_mcts_alpha import MCTS
-from players.player_alpha import Player
 from games.gomoku import Gomoku as GameClass
-from games.pente import Pente as GameClass
 from datetime import datetime
 from copy import deepcopy
-import sys
 import gc
 
 # 在循环内动态映射游戏名称到类
@@ -82,7 +77,9 @@ def play_game_and_collect(mcts: MCTS, game, temp_fn, max_moves=225, use_symmetri
 
     while True:
         state_enc = game.get_encoded_state()  # 期望是视角不变的
-        pi = mcts.run(game, len(game.move_history))  # 向量 (action_size,)
+        pi = mcts.run(game, len(game.move_history))  # 向量 (action_size,) 第二个参数是当前是第几步
+        # 这个参数是让MCtS 知道当前是第几步,是不是要加入dirichlet noise，用来增强MCTS的探索能力
+        # 返回一个向量 (action_size,) 每个元素是每个动作的概率
         pi_for_store = pi.copy()
 
         temp = temp_fn(move_number)

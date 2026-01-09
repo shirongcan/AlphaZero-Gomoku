@@ -820,10 +820,11 @@ def train_alphazero(
             model_candidate.net.load_state_dict(model_best.net.state_dict())
             model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
         else:
-            print(" 候选模型被拒绝 -> 从最佳模型恢复候选模型（重置优化器）。")
-            # 从最佳模型权重重置候选模型，但不继承优化器状态（给予新的开始）
+            print(" 候选模型被拒绝 -> 从最佳模型恢复候选模型。")
+            # 从最佳模型恢复权重和优化器状态（保持训练连续性）
             model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
             model_candidate.net.load_state_dict(model_best.net.state_dict())
+            model_candidate.optimizer.load_state_dict(model_best.optimizer.state_dict())
 
         # 定期保存模型快照
         if it % save_every == 0:

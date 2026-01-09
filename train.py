@@ -189,9 +189,12 @@ def _eval_play_games(
 
         game = GameClass(size=int(board_size))
         # 随机第一手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
+        # 限制在中心9×9区域，避免边角的不合理开局
         # 第一手（玩家1）
-        r1 = random.randint(0, int(board_size) - 1)
-        c1 = random.randint(0, int(board_size) - 1)
+        center = int(board_size) // 2
+        radius = 4  # 9×9区域 (81种可能 × 2先后手 = 162种组合)
+        r1 = random.randint(center - radius, center + radius)
+        c1 = random.randint(center - radius, center + radius)
         game.do_move((r1, c1))
         # 现在 current_player = 2，从第二手开始真正评估
 
@@ -433,9 +436,12 @@ def evaluate_models(model_new: PyTorchModel,
         game = GameClass(size=model_new.board_size)
 
         # 随机第一手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
+        # 限制在中心9×9区域，避免边角的不合理开局
         # 第一手（玩家1）
-        r1 = random.randint(0, model_new.board_size - 1)
-        c1 = random.randint(0, model_new.board_size - 1)
+        center = model_new.board_size // 2
+        radius = 4  # 9×9区域 (81种可能 × 2先后手 = 162种组合)
+        r1 = random.randint(center - radius, center + radius)
+        c1 = random.randint(center - radius, center + radius)
         game.do_move((r1, c1))
         # 现在 current_player = 2，从第二手开始真正评估
 
@@ -843,7 +849,7 @@ if __name__ == "__main__":
         game_name="gomoku",           # 游戏 Gomoku
         board_size=15,                # 棋盘大小 (15x15)
 
-        num_iterations=30,           # 30 次训练迭代
+        num_iterations=300,           # 30 次训练迭代
         games_per_iteration=70,       # 每次迭代 70 局游戏
 
         n_simulations=1600,          # MCTS 1600 次模拟
@@ -851,7 +857,7 @@ if __name__ == "__main__":
 
         buffer_size=60000,           # 经验回放缓冲区，最多 60,000 个样本
         batch_size=128,               # 每个训练批次 128 个样本
-        epochs_per_iter=3,           # 每次迭代 3 个训练轮次
+        epochs_per_iter=5,           # 每次迭代 3 个训练轮次
 
         temp_threshold=10,           # 探索温度阈值
         eval_games=60,               # 50 局评估游戏（提高统计稳定性）
@@ -861,13 +867,13 @@ if __name__ == "__main__":
         # Dirichlet噪声参数（AlphaZero标准配置）
         dirichlet_alpha=0.05,        # Dirichlet噪声的alpha参数（围棋论文标准值）
         dirichlet_epsilon=0.15,      # 噪声混合比例（根节点探索）
-        dirichlet_n_moves=5,        # 前30手添加噪声（增加开局多样性）
+        dirichlet_n_moves=10,        # 前30手添加噪声（增加开局多样性）
 
         model_dir="models",          # 保存模型的目录
         save_every=1,                # 每次迭代保存模型
-        pretrained_model_path="models/snapshot_iter122_20260109_143327.pt",  # 预训练模型路径（None 表示从头训练）
+        pretrained_model_path="models/snapshot_iter140_20260109_190822.pt",  # 预训练模型路径（None 表示从头训练）
 
-        next_iteration_continuation=124,  # 从第 101 次迭代开始
+        next_iteration_continuation=141,  # 从第 101 次迭代开始
 
         # 多进程自对弈：28 个进程
         selfplay_num_workers=28,

@@ -68,6 +68,9 @@ def _selfplay_generate_games(
     games_to_play: int,
     use_symmetries: bool,
     max_moves: int,
+    dirichlet_alpha: float,
+    dirichlet_epsilon: float,
+    dirichlet_n_moves: int,
     device: str = "cpu",
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray, float]], dict]:
     """
@@ -97,9 +100,9 @@ def _selfplay_generate_games(
             n_simulations=n_simulations,
             nn_model=model,
             cpuct=cpuct,
-            dirichlet_alpha=0.15,
-            epsilon=0.15,
-            apply_dirichlet_n_first_moves=15,
+            dirichlet_alpha=dirichlet_alpha,
+            epsilon=dirichlet_epsilon,
+            apply_dirichlet_n_first_moves=dirichlet_n_moves,
             add_dirichlet_noise=add_dirichlet_noise,
         )
         game = GameClass(size=board_size)
@@ -184,21 +187,15 @@ def _eval_play_games(
         global_i = int(start_index) + gi
 
         game = GameClass(size=int(board_size))
-        # 随机前两手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
+        # 随机第一手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
         # 第一手（玩家1）
-        r1 = random.randint(0, int(board_size) - 1)
-        c1 = random.randint(0, int(board_size) - 1)
+        r1 = random.randint(0, int(board_size) - 3
+        c1 = random.randint(0, int(board_size) - 3)
         game.do_move((r1, c1))
-        # 第二手（玩家2）
-        r2 = random.randint(0, int(board_size) - 1)
-        c2 = random.randint(0, int(board_size) - 1)
-        while not game.do_move((r2, c2)):  # 确保第二手合法（不与第一手重叠）
-            r2 = random.randint(0, int(board_size) - 1)
-            c2 = random.randint(0, int(board_size) - 1)
-        # 现在 current_player = 1，从第三手开始真正评估
+        # 现在 current_player = 2，从第二手开始真正评估
 
         new_starts = (global_i % 2 == 0)
-        move_number = 2
+        move_number = 1
 
         mcts_new = MCTS(
             game_class=GameClass,
@@ -376,22 +373,16 @@ def evaluate_models(model_new: PyTorchModel,
     for i in range(n_games):
         game = GameClass(size=model_new.board_size)
 
-        # 随机前两手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
+        # 随机第一手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
         # 第一手（玩家1）
         r1 = random.randint(0, model_new.board_size - 1)
         c1 = random.randint(0, model_new.board_size - 1)
         game.do_move((r1, c1))
-        # 第二手（玩家2）
-        r2 = random.randint(0, model_new.board_size - 1)
-        c2 = random.randint(0, model_new.board_size - 1)
-        while not game.do_move((r2, c2)):  # 确保第二手合法（不与第一手重叠）
-            r2 = random.randint(0, model_new.board_size - 1)
-            c2 = random.randint(0, model_new.board_size - 1)
-        # 现在 current_player = 1，从第三手开始真正评估
+        # 现在 current_player = 2，从第二手开始真正评估
 
         # 确定谁先手：新模型在偶数局先手
         new_starts = (i % 2 == 0)
-        move_number = 2
+        move_number = 1
 
         # 为两个玩家创建 MCTS 实例（扩展时各自使用自己的模型）
         mcts_new = MCTS(game_class=GameClass, n_simulations=n_simulations, nn_model=model_new, cpuct=cpuct, add_dirichlet_noise=False)
@@ -534,6 +525,10 @@ def train_alphazero(
     save_every: int = 1,
     pretrained_model_path: Optional[str] = None,  # 新参数，用于传递预训练模型
     next_iteration_continuation: int = 1,
+    # --- MCTS Dirichlet噪声参数 ---
+    dirichlet_alpha: float = 0.03,             # Dirichlet噪声的alpha参数
+    dirichlet_epsilon: float = 0.25,           # Dirichlet噪声的混合比例
+    dirichlet_n_moves: int = 30,               # 前N手添加Dirichlet噪声
     # --- 多进程自对弈参数 ---
     selfplay_num_workers: int = 0,             # 0=自动（建议 CPU 核心数-1，最多8）
     selfplay_device: str = "cpu",              # 建议 "cpu"，避免 CUDA 多进程争用
@@ -606,9 +601,9 @@ def train_alphazero(
                     n_simulations=n_simulations,
                     nn_model=model_candidate,
                     cpuct=cpuct,
-                    dirichlet_alpha=0.15,
-                    epsilon=0.15,
-                    apply_dirichlet_n_first_moves=15,
+                    dirichlet_alpha=dirichlet_alpha,
+                    epsilon=dirichlet_epsilon,
+                    apply_dirichlet_n_first_moves=dirichlet_n_moves,
                     add_dirichlet_noise=add_dirichlet_noise,
                 )
                 game = GameClass(size=board_size)
@@ -657,6 +652,9 @@ def train_alphazero(
                             games_to_play=int(gcount),
                             use_symmetries=use_symmetries,
                             max_moves=max_moves,
+                            dirichlet_alpha=dirichlet_alpha,
+                            dirichlet_epsilon=dirichlet_epsilon,
+                            dirichlet_n_moves=dirichlet_n_moves,
                             device=selfplay_device,
                         )
                     )
@@ -777,37 +775,41 @@ if __name__ == "__main__":
         game_name="gomoku",           # 游戏 Gomoku
         board_size=15,                # 棋盘大小 (15x15)
 
-        num_iterations=100,           # 30 次训练迭代
-        games_per_iteration=70,       # 每次迭代 40 局游戏
+        num_iterations=30,           # 30 次训练迭代
+        games_per_iteration=70,       # 每次迭代 70 局游戏
 
-        n_simulations=800,          # MCTS 2000 次模拟
+        n_simulations=1600,          # MCTS 1600 次模拟
         cpuct=1.0,                   # MCTS 的探索/利用平衡因子
 
-        buffer_size=60000,           # 经验回放缓冲区，最多 80,000 个样本（容纳约5次迭代）
+        buffer_size=60000,           # 经验回放缓冲区，最多 60,000 个样本
         batch_size=128,               # 每个训练批次 128 个样本
-        epochs_per_iter=3,           # 每次迭代 5 个训练轮次（GPU快时可增加）
+        epochs_per_iter=3,           # 每次迭代 3 个训练轮次
 
         temp_threshold=10,           # 探索温度阈值
-        eval_games=50,               # 30 局评估游戏（提高统计稳定性）
-        eval_mcts_simulations=800,  # 评估时 MCTS 2000 次模拟
-        win_rate_threshold=0.52,     # 如果候选模型胜率达到 55% 则接受
+        eval_games=50,               # 50 局评估游戏（提高统计稳定性）
+        eval_mcts_simulations=1600,  # 评估时 MCTS 1600 次模拟
+        win_rate_threshold=0.52,     # 如果候选模型胜率达到 52% 则接受
+
+        # Dirichlet噪声参数（AlphaZero标准配置）
+        dirichlet_alpha=0.03,        # Dirichlet噪声的alpha参数（围棋论文标准值）
+        dirichlet_epsilon=0.25,      # 噪声混合比例（根节点探索）
+        dirichlet_n_moves=10,        # 前30手添加噪声（增加开局多样性）
 
         model_dir="models",          # 保存模型的目录
         save_every=1,                # 每次迭代保存模型
-        pretrained_model_path=None,  # 预训练模型路径（None 表示从头训练）
+        pretrained_model_path="models/snapshot_iter100_20260109_025843.pt",  # 预训练模型路径（None 表示从头训练）
 
-        next_iteration_continuation=1,  # 从第 1 次迭代开始
+        next_iteration_continuation=101,  # 从第 101 次迭代开始
 
-        # 多进程自对弈：按你的要求提升到 28 个进程
+        # 多进程自对弈：28 个进程
         selfplay_num_workers=28,
         selfplay_device="cpu",
         selfplay_games_per_task=1,
         selfplay_torch_threads=1,
 
-        # 多进程评估：也使用 28 个进程
+        # 多进程评估：28 个进程
         eval_num_workers=28,
         eval_device="cpu",
         eval_games_per_task=1,
         eval_torch_threads=1,
     )
-

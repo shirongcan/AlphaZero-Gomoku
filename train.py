@@ -12,6 +12,7 @@ from copy import deepcopy
 import gc
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import pickle
 
 
 # -------------------------
@@ -189,8 +190,8 @@ def _eval_play_games(
         game = GameClass(size=int(board_size))
         # 随机第一手，增加开局多样性（评估时使用确定性选择，不随机会导致所有对局相同）
         # 第一手（玩家1）
-        r1 = random.randint(0, int(board_size) - 3
-        c1 = random.randint(0, int(board_size) - 3)
+        r1 = random.randint(0, int(board_size) - 1)
+        c1 = random.randint(0, int(board_size) - 1)
         game.do_move((r1, c1))
         # 现在 current_player = 2，从第二手开始真正评估
 
@@ -290,6 +291,64 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
+
+
+# -------------------------
+#  Buffer 持久化
+# -------------------------
+def save_replay_buffer(buffer: ReplayBuffer, filepath: str):
+    """
+    保存 ReplayBuffer 到磁盘
+    只保存 buffer 内容，不保存 capacity（在加载时重新设定）
+    """
+    try:
+        # 将 deque 转为 list 以便 pickle
+        buffer_data = {
+            'buffer': list(buffer.buffer),
+            'capacity': buffer.capacity
+        }
+        with open(filepath, 'wb') as f:
+            pickle.dump(buffer_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"[Buffer] 已保存到: {filepath} (大小: {len(buffer)} 样本)")
+        return True
+    except Exception as e:
+        print(f"[Buffer] 保存失败: {e}")
+        return False
+
+
+def load_replay_buffer(filepath: str, capacity: int) -> Optional[ReplayBuffer]:
+    """
+    从磁盘加载 ReplayBuffer
+    如果文件不存在或加载失败，返回 None
+    """
+    if not os.path.exists(filepath):
+        print(f"[Buffer] 未找到已保存的 buffer: {filepath}")
+        return None
+    
+    try:
+        with open(filepath, 'rb') as f:
+            buffer_data = pickle.load(f)
+        
+        # 创建新的 ReplayBuffer
+        buffer = ReplayBuffer(capacity=capacity)
+        
+        # 恢复数据
+        saved_buffer = buffer_data['buffer']
+        saved_capacity = buffer_data.get('capacity', capacity)
+        
+        # 如果保存的容量与当前配置不同，给出警告
+        if saved_capacity != capacity:
+            print(f"[Buffer] 警告: 保存的容量 ({saved_capacity}) 与当前配置 ({capacity}) 不同")
+        
+        # 将数据添加回 buffer（deque 会自动处理 maxlen）
+        for item in saved_buffer:
+            buffer.buffer.append(item)
+        
+        print(f"[Buffer] 已加载: {filepath} (大小: {len(buffer)} 样本)")
+        return buffer
+    except Exception as e:
+        print(f"[Buffer] 加载失败: {e}")
+        return None
 
 
 # -------------------------
@@ -566,7 +625,17 @@ def train_alphazero(
         model_candidate.net.load_state_dict(model_best.net.state_dict())
 
     # 经验回放缓冲区
-    buffer = ReplayBuffer(capacity=buffer_size)
+    buffer_filepath = os.path.join(model_dir, "replay_buffer_latest.pkl")
+    
+    # 尝试加载已保存的 buffer
+    buffer = load_replay_buffer(buffer_filepath, capacity=buffer_size)
+    
+    # 如果加载失败或文件不存在，创建新的空 buffer
+    if buffer is None:
+        print("[Buffer] 创建新的空 buffer")
+        buffer = ReplayBuffer(capacity=buffer_size)
+    else:
+        print(f"[Buffer] 成功加载历史 buffer，当前大小: {len(buffer)}/{buffer_size}")
 
     # 温度调度
     def temp_fn(move_number: int):
@@ -574,7 +643,7 @@ def train_alphazero(
 
     for it in range(next_iteration_continuation, next_iteration_continuation + num_iterations):
         t0 = time.time()
-        print(f"\n=== ITER {it}/{next_iteration_continuation + num_iterations - 1}: 自对弈生成 (games={games_per_iteration}, sims={n_simulations}) ===")
+        print(f"\n=== ITER {it}/{next_iteration_continuation + num_iterations - 1}: 自对弈生成 (games={games_per_iteration}, sims={n_simulations}), 开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
         selfplay_t0 = time.time()
 
         # 使用候选模型进行自对弈生成（多进程）
@@ -673,7 +742,7 @@ def train_alphazero(
                 pass
 
         selfplay_t1 = time.time()
-        print(f"自对弈完成：耗时 {(selfplay_t1 - selfplay_t0):.1f}s，胜负统计={winners}，buffer_size={len(buffer)}")
+        print(f"自对弈完成：耗时 {(selfplay_t1 - selfplay_t0)/60:.2f}分钟，胜负统计={winners}，buffer_size={len(buffer)}")
 
         # 如果有足够的样本，训练候选模型
         if len(buffer) >= batch_size:
@@ -731,15 +800,12 @@ def train_alphazero(
 
         eval_t1 = time.time()
         print(
-            f"评估完成：耗时 {(eval_t1 - eval_t0):.1f}s，胜率={win_rate:.3f}（{new_wins}/{eval_games}），平局={draws}"
+            f"评估完成：耗时 {(eval_t1 - eval_t0)/60:.2f} 分钟，胜率={win_rate:.3f}（{new_wins}/{eval_games}），平局={draws}"
         )
 
         # 接受/拒绝
         if win_rate >= win_rate_threshold:
             print(" 候选模型被接受 -> 提升为最佳模型。")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(model_dir, f"model_best_iter{it}_{timestamp}.pt")
-            model_candidate.save(path)
             # 更新 model_best（深拷贝权重和优化器状态）
             model_best.net.load_state_dict(model_candidate.net.state_dict())
             model_best.optimizer.load_state_dict(model_candidate.optimizer.state_dict())
@@ -752,17 +818,19 @@ def train_alphazero(
             # 从最佳模型权重重置候选模型，但不继承优化器状态（给予新的开始）
             model_candidate = PyTorchModel(board_size=board_size, action_size=action_size)
             model_candidate.net.load_state_dict(model_best.net.state_dict())
-            # 不加载优化器状态，让优化器保持初始化状态，避免陷入局部最优
 
-        # 定期保存最佳模型状态
+        # 定期保存模型快照
         if it % save_every == 0:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             snapshot_path = os.path.join(model_dir, f"snapshot_iter{it}_{timestamp}.pt")
             model_best.save(snapshot_path)
-            print(f" Saved snapshot: {snapshot_path}")
+            print(f" 💾 Saved snapshot: {snapshot_path}")
+        
+        # 每轮都保存 buffer（覆盖旧的，只保留最新）
+        save_replay_buffer(buffer, buffer_filepath)
 
         t1 = time.time()
-        print(f"迭代 {it} 完成，耗时 {(t1 - t0):.1f}s。本次迭代获胜者: {winners}")
+        print(f"迭代 {it} 完成，耗时 {(t1 - t0)/60:.2f}分钟。本次迭代获胜者: {winners}")
 
     print("\n=== 训练完成 ===")
 
@@ -786,20 +854,20 @@ if __name__ == "__main__":
         epochs_per_iter=3,           # 每次迭代 3 个训练轮次
 
         temp_threshold=10,           # 探索温度阈值
-        eval_games=50,               # 50 局评估游戏（提高统计稳定性）
+        eval_games=60,               # 50 局评估游戏（提高统计稳定性）
         eval_mcts_simulations=1600,  # 评估时 MCTS 1600 次模拟
-        win_rate_threshold=0.52,     # 如果候选模型胜率达到 52% 则接受
+        win_rate_threshold=0.5,     # 如果候选模型胜率达到 52% 则接受
 
         # Dirichlet噪声参数（AlphaZero标准配置）
-        dirichlet_alpha=0.03,        # Dirichlet噪声的alpha参数（围棋论文标准值）
-        dirichlet_epsilon=0.25,      # 噪声混合比例（根节点探索）
-        dirichlet_n_moves=10,        # 前30手添加噪声（增加开局多样性）
+        dirichlet_alpha=0.05,        # Dirichlet噪声的alpha参数（围棋论文标准值）
+        dirichlet_epsilon=0.15,      # 噪声混合比例（根节点探索）
+        dirichlet_n_moves=5,        # 前30手添加噪声（增加开局多样性）
 
         model_dir="models",          # 保存模型的目录
         save_every=1,                # 每次迭代保存模型
-        pretrained_model_path="models/snapshot_iter100_20260109_025843.pt",  # 预训练模型路径（None 表示从头训练）
+        pretrained_model_path="models/snapshot_iter122_20260109_143327.pt",  # 预训练模型路径（None 表示从头训练）
 
-        next_iteration_continuation=101,  # 从第 101 次迭代开始
+        next_iteration_continuation=124,  # 从第 101 次迭代开始
 
         # 多进程自对弈：28 个进程
         selfplay_num_workers=28,
